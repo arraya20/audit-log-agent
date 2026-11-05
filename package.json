@@ -1,7 +1,6 @@
 {
   "name": "pharos-audit-log-agent",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
   "description": "Wallet activity audit log for Pharos. Reads blocks, logs and receipts from chain data and reports what moved, what was approved, and what could not be read.",
   "license": "MIT",
@@ -22,5 +21,18 @@
     "deploy": "wrangler pages deploy"
   },
   "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {},
+  "files": [
+    "src",
+    "scripts",
+    "functions",
+    "public",
+    "SKILL.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "author": "Namri",
+  "publishConfig": {
+    "access": "public"
+  }
 }
