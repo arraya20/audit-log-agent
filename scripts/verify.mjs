@@ -64,12 +64,12 @@ async function batch(entries) {
       if (r.error) throw new Error(`${chunk[j].method}: ${r.error.message}`);
       out.push(r.result);
     }
-    if (chunk.length === BATCH && i > 0 && i % (BATCH * 10) === 0) {
-      const line = `  reading blocks ${i}/${entries.length}`;
-      process.stderr.write("\r" + line);
+    // Progress goes to a TTY only: piped output stays clean for logs and diffs.
+    if (process.stderr.isTTY && chunk.length === BATCH && i > 0 && i % (BATCH * 10) === 0) {
+      process.stderr.write(`\r  reading blocks ${i}/${entries.length}`);
     }
   }
-  if (entries.length >= BATCH) process.stderr.write("\r" + " ".repeat(44) + "\r");
+  if (process.stderr.isTTY && entries.length >= BATCH) process.stderr.write("\r" + " ".repeat(44) + "\r");
   return out;
 }
 
