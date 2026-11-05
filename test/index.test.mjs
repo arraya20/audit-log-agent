@@ -8,6 +8,7 @@
 // broken decoder fails in under a second instead of after the chain fixtures.
 import "./unit.test.mjs";
 import "./classify.test.mjs";
+import "./transport.test.mjs";
 import "./report.test.mjs";
 import "./api.test.mjs";
 

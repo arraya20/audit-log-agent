@@ -58,6 +58,14 @@ export async function resolveWindow(rpc, hours) {
   return { latest, fromBlock: Math.max(0, latest - blocks + 1), toBlock: latest, blocks };
 }
 
+// A chunk that fails as a whole is one gap for its range, not one per block:
+// same information, readable report.
+function errText(err) {
+  if (!err) return "rpc failure";
+  const code = err.code ? String(err.code) : "RPC_FAILURE";
+  return `${code}: ${err.message ? String(err.message) : ""}`.trim();
+}
+
 /**
  * Read every block in range, keeping only the transactions that touch the wallet.
  * Returns a blockNumber -> timestamp map for the whole range, which the log stage
@@ -72,11 +80,21 @@ export async function scanBlocks(rpc, { fromBlock, toBlock, wallet }) {
   const perChunk = await mapWithConcurrency(ranges, BUDGET.concurrency, async ([a, b]) => {
     const calls = [];
     for (let n = a; n <= b; n++) calls.push({ method: "eth_getBlockByNumber", params: ["0x" + n.toString(16), true] });
-    const items = await rpc.batch(calls);
-    return { a, b, items };
+    // A throttle that outlives the transport's retries used to reject out of
+    // here and take the entire audit with it. The honest outcome is a declared
+    // gap: the report then says PARTIAL instead of disappearing.
+    try {
+      return { a, b, items: await rpc.batch(calls) };
+    } catch (err) {
+      return { a, b, items: null, error: err };
+    }
   });
 
-  for (const { a, b, items } of perChunk) {
+  for (const { a, b, items, error } of perChunk) {
+    if (!items) {
+      gaps.push({ stage: "blocks", fromBlock: a, toBlock: b, reason: errText(error) });
+      continue;
+    }
     for (let i = 0; i < items.length; i++) {
       const n = a + i;
       const it = items[i];
@@ -119,12 +137,21 @@ export async function scanLogs(rpc, { fromBlock, toBlock, wallet }) {
       { method: "eth_getLogs", params: [{ ...range, topics: [EVENTS.APPROVAL, padded] }] },
       { method: "eth_getLogs", params: [{ ...range, topics: [EVENTS.APPROVAL_FOR_ALL, padded] }] },
     ];
-    const items = await rpc.batch(calls);
-    return { a, b, items };
+    try {
+      return { a, b, items: await rpc.batch(calls) };
+    } catch (err) {
+      return { a, b, items: null, error: err };
+    }
   });
 
   const names = ["transfer-out", "transfer-in", "approval", "approval-for-all"];
-  for (const { a, b, items } of perChunk) {
+  for (const { a, b, items, error } of perChunk) {
+    if (!items) {
+      for (const name of names) {
+        gaps.push({ stage: "logs", query: name, fromBlock: a, toBlock: b, reason: errText(error) });
+      }
+      continue;
+    }
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       if (!it.ok) {
@@ -159,11 +186,18 @@ export async function scanReceipts(rpc, { blockNumbers }) {
   const perChunk = await mapWithConcurrency(ranges, BUDGET.concurrency, async ([a, b]) => {
     const slice = numbers.slice(a, b + 1);
     const calls = slice.map((n) => ({ method: "eth_getBlockReceipts", params: ["0x" + n.toString(16)] }));
-    const items = await rpc.batch(calls);
-    return { slice, items };
+    try {
+      return { slice, items: await rpc.batch(calls) };
+    } catch (err) {
+      return { slice, items: null, error: err };
+    }
   });
 
-  for (const { slice, items } of perChunk) {
+  for (const { slice, items, error } of perChunk) {
+    if (!items) {
+      gaps.push({ stage: "receipts", fromBlock: slice[0], toBlock: slice[slice.length - 1], reason: errText(error) });
+      continue;
+    }
     for (let i = 0; i < items.length; i++) {
       const n = slice[i];
       const it = items[i];
@@ -197,7 +231,20 @@ export async function resolveTokenMeta(rpc, tokens) {
     calls.push({ method: "eth_call", params: [{ to: t, data: SELECTOR_DECIMALS }, "latest"] });
     calls.push({ method: "eth_call", params: [{ to: t, data: SELECTOR_SYMBOL }, "latest"] });
   }
-  const items = await rpc.batch(calls);
+  // A throttle that survives the transport's retries must not take the whole
+  // audit down with it. Without decimals the amounts cannot be expressed, so the
+  // honest outcome is: keep the raw movements, exclude the asset from totals and
+  // say why. Throwing here produced a 502 where a PARTIAL report was available.
+  let items;
+  try {
+    items = await rpc.batch(calls);
+  } catch (err) {
+    for (const token of unique) {
+      meta.set(token, null);
+      unresolved.push({ token, reason: `metadata unreadable: ${err && err.code ? err.code : "rpc failure"}` });
+    }
+    return { meta, unresolved };
+  }
 
   for (let i = 0; i < unique.length; i++) {
     const decItem = items[i * 2];

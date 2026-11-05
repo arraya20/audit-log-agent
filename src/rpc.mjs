@@ -34,9 +34,12 @@ const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function createRpc({
   url,
   fetchImpl = globalThis.fetch,
-  retries = 5,
-  backoffBaseMs = 400,
-  backoffMaxMs = 8000,
+  // Measured on the public endpoint: a throttle window lasts tens of seconds,
+  // so 5 tries over 12 s gave up while the node was still recovering. The
+  // schedule below waits about 50 s in total, then raises — never swallows.
+  retries = 7,
+  backoffBaseMs = 800,
+  backoffMaxMs = 15000,
   sleep = defaultSleep,
   timeoutMs = 30000,
 } = {}) {

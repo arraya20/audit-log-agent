@@ -46,6 +46,13 @@ transaction with unknown status, or a receipt that could not be read.
 A `PARTIAL` report is still a 200. The audit ran; it is telling you where it is
 blind. A caller that wants only fully covered periods checks the field.
 
+When the node throttles, the transport retries with backoff for about 50 seconds
+and then gives up *for that chunk only*. That chunk becomes a gap and the report
+says `PARTIAL`. The earlier behaviour — raising out of the scan — turned a
+recoverable read into a 502 with no report at all, which is the opposite of
+useful. Both paths are tested in `test/transport.test.mjs`, against a fake node,
+because a recorded fixture can only replay successful answers.
+
 ## Why windows are capped
 
 Finding native transfers means reading every block body, and the public RPC
@@ -75,7 +82,7 @@ returning less than was asked for.
 
 ## Run it
 
-    npm test                        # 88 tests, no network, no dependencies
+    npm test                        # 99 tests, no network, no dependencies
     npm run audit -- <wallet> <hours>
     npm run verify -- <wallet> <hours>
     npm run dev                     # wrangler pages dev
@@ -85,11 +92,14 @@ returning less than was asked for.
 and the verifier agree, the number belongs to the chain rather than to our
 arithmetic.
 
-Last run against the live chain:
+Runs against the live chain (`<wallet> 0.5` and `0.02`; the clock moves, so a
+re-run lands on a different window):
 
     window 22159468..22161181 (1714 blocks), 255 transfer logs, 32 wallet txs
+    window 22161507..22161575    (69 blocks),  14 transfer logs,  1 wallet tx
+
     USDC in/out, WPROS in/out, gas paid, tx count, native out, block count
-    8/8 agree
+    8/8 agree on both
 
 ## API
 
