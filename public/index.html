@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>audit log — Pharos</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>audit log</h1>
+    <p class="sub">Wallet activity read from Pharos chain data. Amounts are exact base-unit values; nothing is estimated, priced, or inferred from a function selector.</p>
+  </header>
+
+  <form id="form" autocomplete="off">
+    <label class="field">
+      <span>wallet</span>
+      <input id="wallet" name="wallet" type="text" spellcheck="false" placeholder="0x…" required>
+    </label>
+    <label class="field">
+      <span>window</span>
+      <select id="hours" name="hours"></select>
+    </label>
+    <button id="run" type="submit">read chain</button>
+  </form>
+
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+  <div id="report" hidden></div>
+
+  <section id="limits" class="limits"></section>
+</main>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
