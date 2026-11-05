@@ -11,7 +11,9 @@
 // cannot hide here, because none of that code runs. If both paths agree, the
 // number is a property of the chain rather than of our arithmetic.
 
-import { runAudit } from "../src/report.mjs";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 const RPC = process.env.PHAROS_RPC ?? "https://rpc.pharos.xyz";
 const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
@@ -75,34 +77,60 @@ async function batch(entries) {
 
 const topicToAddress = (topic) => "0x" + topic.slice(-40);
 
-// --- independent recomputation -------------------------------------------------
+// --- independent raw-chain recomputation --------------------------------------
+// This script intentionally has no implementation import and does not consume a
+// report to discover which assets to check. It derives the head/window, discovers
+// every token from raw Transfer logs, and then aggregates those logs independently.
+const head = BigInt(await rpc("eth_blockNumber", []));
+const fromBlock = Number(head) - Math.max(1, Math.round((hours * 3600) / 1.05)) + 1;
+const toBlock = Number(head);
+if (fromBlock < 0) throw new Error("window starts before genesis");
 
-const report = await runAudit({ wallet: walletArg, hours });
-const { fromBlock, toBlock } = report.window;
-
-// Token movement, straight from Transfer logs.
-const tokenIn = new Map();
-const tokenOut = new Map();
+const tokenLogs = new Map();
+const seenLogKeys = new Set();
 let transferLogs = 0;
-
-for (const asset of report.totals.byAsset) {
-  let inn = 0n;
-  let out = 0n;
-  for (let start = fromBlock; start <= toBlock; start += LOG_SPAN) {
-    const end = Math.min(start + LOG_SPAN - 1, toBlock);
-    const logs = await rpc("eth_getLogs", [
-      { address: asset.address.toLowerCase(), fromBlock: hex(start), toBlock: hex(end), topics: [TRANSFER] },
-    ]);
+for (let start = fromBlock; start <= toBlock; start += LOG_SPAN) {
+  const end = Math.min(start + LOG_SPAN - 1, toBlock);
+  for (const topics of [[TRANSFER, "0x" + "0".repeat(24) + wallet.slice(2)], [TRANSFER, null, "0x" + "0".repeat(24) + wallet.slice(2)]]) {
+    const logs = await rpc("eth_getLogs", [{ fromBlock: hex(start), toBlock: hex(end), topics }]);
     for (const log of logs) {
-      const amount = BigInt(log.data);
-      if (topicToAddress(log.topics[1]) === wallet) out += amount;
-      if (topicToAddress(log.topics[2]) === wallet) inn += amount;
+      const key = `${String(log.transactionHash).toLowerCase()}:${String(log.logIndex).toLowerCase()}`;
+      if (seenLogKeys.has(key)) continue;
+      seenLogKeys.add(key);
+      const token = String(log.address).toLowerCase();
+      if (!tokenLogs.has(token)) tokenLogs.set(token, []);
+      tokenLogs.get(token).push(log);
       transferLogs++;
     }
   }
-  tokenIn.set(asset.symbol, inn);
-  tokenOut.set(asset.symbol, out);
 }
+
+const tokenIn = new Map();
+const tokenOut = new Map();
+for (const [token, logs] of tokenLogs) {
+  let inn = 0n;
+  let out = 0n;
+  for (const log of logs) {
+    const amount = BigInt(log.data);
+    if (topicToAddress(log.topics[1]) === wallet) out += amount;
+    if (topicToAddress(log.topics[2]) === wallet) inn += amount;
+  }
+  tokenIn.set(token, inn);
+  tokenOut.set(token, out);
+}
+
+// The implementation report is invoked through its CLI boundary, not imported.
+// This preserves a module-independent verifier while still comparing raw-chain
+// recomputation to the shipped report.
+const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const report = JSON.parse(execFileSync(process.execPath, [
+  join(projectRoot, "scripts/audit.mjs"), walletArg, String(hours), "--json",
+  `--fromBlock=${fromBlock}`, `--toBlock=${toBlock}`,
+], {
+  cwd: projectRoot,
+  env: process.env,
+  encoding: "utf8",
+}));
 
 // Gas, straight from the receipts of the wallet's own transactions.
 const blocks = await batch(
@@ -141,19 +169,26 @@ for (const blk of blocks) {
   }
 }
 
-// --- compare -------------------------------------------------------------------
+// --- raw-chain invariants ------------------------------------------------------
 
 const checks = [];
 const check = (label, ours, chain) => checks.push({ label, ours: String(ours), chain: String(chain), ok: String(ours) === String(chain) });
 
-for (const asset of report.totals.byAsset) {
-  check(`${asset.symbol} in (base units)`, asset.inRaw, tokenIn.get(asset.symbol));
-  check(`${asset.symbol} out (base units)`, asset.outRaw, tokenOut.get(asset.symbol));
+const reportedAssets = new Map(report.totals.byAsset.map((a) => [String(a.address).toLowerCase(), a]));
+for (const [token, value] of tokenIn) {
+  const asset = reportedAssets.get(token);
+  check(`${token} present in report`, Boolean(asset), true);
+  if (asset) {
+    check(`${token} in (base units)`, asset.inRaw, value);
+    check(`${token} out (base units)`, asset.outRaw, tokenOut.get(token));
+  }
 }
+for (const [token] of reportedAssets) check(`${token} report asset exists on chain`, tokenLogs.has(token), true);
+check("window block count", toBlock - fromBlock + 1, blocks.length);
+
 check("gas paid (base units)", report.fees.totalRaw, feeTotal);
 check("fee-paying tx count", report.fees.transactions, feeTx);
 check("native out (base units)", report.totals.native.outRaw, nativeOut);
-check("window block count", report.window.blocks, blocks.length);
 
 let failed = 0;
 for (const c of checks) {
@@ -161,7 +196,6 @@ for (const c of checks) {
   console.log(`${c.ok ? "ok  " : "FAIL"}  ${c.label.padEnd(26)} audit ${c.ours.padStart(22)}  chain ${c.chain.padStart(22)}`);
 }
 
-console.log(`\nwindow ${fromBlock}..${toBlock} (${blocks.length} blocks), ${transferLogs} transfer logs, ${myTxs.length} wallet txs, completeness ${report.completeness}`);
-if (report.fees.unverified > 0) console.log(`note: ${report.fees.unverified} receipt(s) unreadable, so gas is a lower bound on both sides`);
+console.log(`\nwindow ${fromBlock}..${toBlock} (${blocks.length} blocks), ${transferLogs} transfer logs, ${myTxs.length} wallet txs`);
 console.log(failed === 0 ? `\n${checks.length}/${checks.length} agree` : `\n${failed} of ${checks.length} DISAGREE`);
 process.exitCode = failed === 0 ? 0 : 1;

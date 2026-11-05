@@ -79,7 +79,10 @@ export async function buildReport(rpc, { wallet, hours, window, nowSeconds = Mat
   ]);
 
   // Stage 2: receipts only for blocks that contain wallet transactions.
-  const receiptScan = await scanReceipts(rpc, { blockNumbers: blockScan.txs.map((t) => t.blockNumber) });
+  const receiptScan = await scanReceipts(rpc, {
+    blockNumbers: blockScan.txs.map((t) => t.blockNumber),
+    maxReceipts: BUDGET.maxReceipts,
+  });
 
   // Stage 3: metadata for every token that appears in a log.
   const tokenScan = await resolveTokenMeta(rpc, logScan.logs.map((l) => String(l.address).toLowerCase()));

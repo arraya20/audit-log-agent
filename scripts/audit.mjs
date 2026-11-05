@@ -7,7 +7,12 @@ import { runAudit } from "../src/report.mjs";
 import { toChecksumAddress, isAddress } from "../src/address.mjs";
 import { CHAIN, JOB } from "../src/config.mjs";
 
-const [walletArg, hoursArg] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const jsonOutput = args.includes("--json");
+const positional = args.filter((x) => !x.startsWith("--"));
+const fromArg = args.find((x) => x.startsWith("--fromBlock="))?.split("=", 2)[1];
+const toArg = args.find((x) => x.startsWith("--toBlock="))?.split("=", 2)[1];
+const [walletArg, hoursArg] = positional;
 
 if (!walletArg || !isAddress(walletArg)) {
   console.error("usage: node scripts/audit.mjs <wallet> [hours]");
@@ -20,7 +25,24 @@ if (!Number.isFinite(hours) || hours <= 0) {
   process.exit(2);
 }
 
-const report = await runAudit({ wallet: toChecksumAddress(walletArg), hours });
+const window = fromArg !== undefined && toArg !== undefined
+  ? {
+      fromBlock: Number(fromArg),
+      toBlock: Number(toArg),
+      blocks: Number(toArg) - Number(fromArg) + 1,
+    }
+  : null;
+if (window && (!Number.isSafeInteger(window.fromBlock) || !Number.isSafeInteger(window.toBlock) || window.fromBlock < 0 || window.toBlock < window.fromBlock)) {
+  console.error("invalid explicit block window");
+  process.exit(2);
+}
+
+const report = await runAudit({ wallet: toChecksumAddress(walletArg), hours, window });
+
+if (jsonOutput) {
+  process.stdout.write(JSON.stringify(report) + "\n");
+  process.exit(0);
+}
 
 const line = (s = "") => process.stdout.write(s + "\n");
 const when = (ts) => (ts === null || ts === undefined ? "?".padEnd(20) : new Date(ts * 1000).toISOString().replace(".000Z", "Z").padEnd(20));

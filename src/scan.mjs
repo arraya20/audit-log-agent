@@ -176,11 +176,21 @@ export async function scanLogs(rpc, { fromBlock, toBlock, wallet }) {
  * asking for receipts per block would multiply the call count for no gain.
  * eth_getBlockReceipts returns the whole block's receipts in one call.
  */
-export async function scanReceipts(rpc, { blockNumbers }) {
+export async function scanReceipts(rpc, { blockNumbers, maxReceipts = Infinity }) {
   const numbers = [...new Set(blockNumbers)].sort((x, y) => x - y);
   const receipts = new Map();
   const gaps = [];
   if (numbers.length === 0) return { receipts, gaps };
+  if (numbers.length > maxReceipts) {
+    gaps.push({
+      stage: "receipts",
+      fromBlock: numbers[0],
+      toBlock: numbers[numbers.length - 1],
+      reason: `receipt budget exceeded: ${numbers.length} blocks requested, maximum is ${maxReceipts}`,
+      code: "RECEIPT_BUDGET_EXCEEDED",
+    });
+    return { receipts, gaps };
+  }
 
   const ranges = chunkRange(0, numbers.length - 1, BUDGET.blockBatch);
   const perChunk = await mapWithConcurrency(ranges, BUDGET.concurrency, async ([a, b]) => {
