@@ -4,23 +4,46 @@
 // scan budget gets exercised honestly: it prints what it actually covered.
 
 import { runAudit } from "../src/report.mjs";
+import { summarizeReport, toMarkdown, toCsv } from "../src/export.mjs";
 import { toChecksumAddress, isAddress } from "../src/address.mjs";
 import { CHAIN, JOB } from "../src/config.mjs";
 
 const args = process.argv.slice(2);
 const jsonOutput = args.includes("--json");
+const mdOutput = args.includes("--markdown") || args.includes("--md");
+const csvOutput = args.includes("--csv");
 const positional = args.filter((x) => !x.startsWith("--"));
 const fromArg = args.find((x) => x.startsWith("--fromBlock="))?.split("=", 2)[1];
 const toArg = args.find((x) => x.startsWith("--toBlock="))?.split("=", 2)[1];
+const fromDateArg = args.find((x) => x.startsWith("--from="))?.split("=", 2)[1];
+const toDateArg = args.find((x) => x.startsWith("--to="))?.split("=", 2)[1];
 const [walletArg, hoursArg] = positional;
 
 if (!walletArg || !isAddress(walletArg)) {
-  console.error("usage: node scripts/audit.mjs <wallet> [hours]");
+  console.error("usage: node scripts/audit.mjs <wallet> [hours] [--from=<iso> --to=<iso>] [--json|--markdown|--csv]");
   process.exit(2);
 }
 
-const hours = hoursArg === undefined ? JOB.defaultHours : Number(hoursArg);
-if (!Number.isFinite(hours) || hours <= 0) {
+function parseTimeArg(raw) {
+  if (raw === undefined) return null;
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    return Math.floor(n > 1e12 ? n / 1000 : n);
+  }
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return NaN;
+  return Math.floor(ms / 1000);
+}
+
+const fromSeconds = parseTimeArg(fromDateArg);
+const toSeconds = parseTimeArg(toDateArg);
+if ((fromSeconds !== null || toSeconds !== null) && (!Number.isFinite(fromSeconds) || !Number.isFinite(toSeconds) || toSeconds <= fromSeconds)) {
+  console.error("--from and --to must be valid ISO-8601 dates or timestamps with from < to");
+  process.exit(2);
+}
+
+const hours = hoursArg === undefined ? (fromSeconds !== null ? null : JOB.defaultHours) : Number(hoursArg);
+if (hours !== null && (!Number.isFinite(hours) || hours <= 0)) {
   console.error("hours must be a positive number");
   process.exit(2);
 }
@@ -37,12 +60,22 @@ if (window && (!Number.isSafeInteger(window.fromBlock) || !Number.isSafeInteger(
   process.exit(2);
 }
 
-const report = await runAudit({ wallet: toChecksumAddress(walletArg), hours, window });
+const report = await runAudit({ wallet: toChecksumAddress(walletArg), hours, fromSeconds, toSeconds, window });
 
 if (jsonOutput) {
   process.stdout.write(JSON.stringify(report) + "\n");
   process.exit(0);
 }
+if (mdOutput) {
+  process.stdout.write(toMarkdown(report));
+  process.exit(0);
+}
+if (csvOutput) {
+  process.stdout.write(toCsv(report));
+  process.exit(0);
+}
+
+const summary = summarizeReport(report);
 
 const line = (s = "") => process.stdout.write(s + "\n");
 const when = (ts) => (ts === null || ts === undefined ? "?".padEnd(20) : new Date(ts * 1000).toISOString().replace(".000Z", "Z").padEnd(20));
@@ -59,12 +92,29 @@ function amountLabel(e) {
   return "-";
 }
 
-line(`wallet        ${report.wallet}`);
+line(`wallet        ${report.wallet} (${summary.walletUrl})`);
 line(`chain         ${report.chain.id} (${report.chain.name})`);
 line(`window        blocks ${report.window.fromBlock}..${report.window.toBlock}  ${when(report.window.fromTime)} -> ${when(report.window.toTime)}`);
 line(`completeness  ${report.completeness}`);
 for (const r of report.reasons) line(`  - ${r}`);
 line();
+line(`summary`);
+line(`  ${summary.narrative}`);
+line();
+line(`category totals`);
+line(`  transfers in          ${summary.categoryTotals.transfersIn.count}`);
+line(`  transfers out         ${summary.categoryTotals.transfersOut.count}`);
+line(`  swaps (same-tx)       ${summary.categoryTotals.swaps.count}`);
+line(`  approvals             ${summary.categoryTotals.approvals.count}`);
+line(`  contract interactions ${summary.categoryTotals.contractInteractions.count}`);
+line();
+if (summary.notableTransactions.length > 0) {
+  line(`notable transactions (${summary.notableTransactions.length})`);
+  for (const n of summary.notableTransactions.slice(0, 20)) {
+    line(`  ${when(n.blockTimestamp)} [${n.category}] ${n.reason}: ${n.summary} (${n.explorerUrl ?? "-"})`);
+  }
+  line();
+}
 
 line(`movements (${report.movements.length})`);
 for (const m of report.movements.slice(0, 40)) {

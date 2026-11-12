@@ -77,15 +77,18 @@ returning less than was asked for.
     src/scan.mjs        block, log and receipt scanning with gap tracking
     src/classify.mjs    turns logs and transactions into audit entries
     src/report.mjs      assembles the report
+    src/export.mjs      plain-language summary, category grouping, notable links, Markdown & CSV export
     functions/api/audit.js   the HTTP surface
-    public/             dashboard, rendering only, no arithmetic
+    public/             dashboard, rendering and export only, no arithmetic
 
 ## Run it
 
-    npm test                        # 99 tests, no network, no dependencies
+    npm test                                            # 104 tests, no network, no dependencies
     npm run audit -- <wallet> <hours>
+    npm run audit -- <wallet> --from=<iso> --to=<iso> --markdown
+    npm run audit -- <wallet> <hours> --csv
     npm run verify -- <wallet> <hours>
-    npm run dev                     # wrangler pages dev
+    npm run dev                                         # wrangler pages dev public
 
 `npm run verify` recomputes the same numbers without importing anything from
 `src/` — it speaks JSON-RPC itself and sums raw logs and receipts. If the audit
@@ -103,11 +106,15 @@ re-run lands on a different window):
 
 ## API
 
-    POST /api/audit  {"wallet": "0x…", "hours": "0.5"}
+    POST /api/audit                  {"wallet": "0x…", "hours": "0.5"}
+    POST /api/audit                  {"wallet": "0x…", "from": "2026-11-05T06:00:00Z", "to": "2026-11-05T06:30:00Z"}
+    POST /api/audit?format=markdown  → Markdown compliance report
+    POST /api/audit?format=csv       → RFC-4180 CSV ledger
 
-Accepts exactly two fields. Anything else — `transactions`, `categories`,
-`verdict`, `policy` — is rejected with `UNKNOWN_FIELD` rather than ignored. The
-caller supplies a wallet and a window; it does not supply the evidence.
+Accepts `wallet` and a window (`hours` or `from` + `to`). Anything else —
+`transactions`, `categories`, `verdict`, `policy` — is rejected with
+`UNKNOWN_FIELD` rather than ignored. The caller supplies a wallet and a window;
+it does not supply the evidence.
 
     GET /api/audit   → chain limits, so a client can size a window without guessing
 

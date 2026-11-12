@@ -6,6 +6,7 @@
 // without pretending the data came from anywhere but the chain.
 import { suite, test, eq, deepEq, assert, finish } from "./runner.mjs";
 import { runAudit } from "../src/report.mjs";
+import { summarizeReport, toMarkdown, toCsv } from "../src/export.mjs";
 import { replayFetch, loadFixture } from "./helpers/replay.mjs";
 
 const SWAP_WALLET = "0x1F3546a29EeC2102c8d52E21a45114124014c85C";
@@ -225,6 +226,35 @@ await test("a report survives JSON serialisation, which BigInt would break", asy
     const parsed = JSON.parse(text);
     eq(parsed.wallet, result.wallet);
   }
+});
+
+suite("compliance summary, categories, notable links and exports");
+
+await test("same-transaction two-way movements are grouped as swaps from ledger evidence", () => {
+  const s = summarizeReport(swap.result);
+  eq(s.categories.transfersIn.length, 2);
+  eq(s.categories.transfersOut.length, 2);
+  eq(s.categories.swaps.length, 2);
+  eq(s.categories.approvals.length, 0);
+  eq(s.categories.contractInteractions.length, 2);
+  assert(s.categories.swaps[0].explorerUrl.startsWith("https://explorer.pharos.xyz/tx/0x"), "swap entry must link to explorer");
+  assert(s.notableTransactions.length >= 2, "notable transactions must include the swaps and largest movements");
+  assert(s.narrative.includes(swap.result.wallet), "plain-language summary must name the wallet");
+});
+
+await test("markdown and csv exports preserve exact figures and explorer links", () => {
+  const md = toMarkdown(swap.result);
+  assert(md.includes("# Wallet Activity Audit Report"), "markdown header required");
+  assert(md.includes("## Totals per Category"), "category totals section required");
+  assert(md.includes("## Notable Transactions"), "notable transactions section required");
+  assert(md.includes("https://explorer.pharos.xyz/tx/"), "explorer tx links required in markdown");
+  assert(md.includes("110.331251"), "exact USDC outflow required in markdown");
+
+  const csv = toCsv(swap.result);
+  const lines = csv.trim().split("\n");
+  assert(lines[0].startsWith("category,kind,inSwapTx,timestamp,blockNumber,txHash,explorerUrl"), "csv header required");
+  assert(lines.some((l) => l.includes("TRANSFERS_OUT,TOKEN_OUT,true")), "outgoing swap leg must be marked in CSV");
+  assert(lines.some((l) => l.includes("TRANSFERS_IN,TOKEN_IN,true")), "incoming swap leg must be marked in CSV");
 });
 
 finish(import.meta.url);

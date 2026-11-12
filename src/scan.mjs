@@ -58,6 +58,44 @@ export async function resolveWindow(rpc, hours) {
   return { latest, fromBlock: Math.max(0, latest - blocks + 1), toBlock: latest, blocks };
 }
 
+/** Resolve the block window for a date range [fromSeconds, toSeconds]. Refuses rather than truncating. */
+export async function resolveDateRangeWindow(rpc, { fromSeconds, toSeconds }) {
+  if (!Number.isFinite(fromSeconds) || !Number.isFinite(toSeconds) || toSeconds <= fromSeconds) {
+    const err = new Error("date range requires valid from < to timestamps");
+    err.code = "INVALID_DATE_RANGE";
+    throw err;
+  }
+  const spanHours = (toSeconds - fromSeconds) / 3600;
+  const requestedBlocks = blocksForHours(spanHours);
+  if (requestedBlocks > BUDGET.maxBlocks) {
+    const err = new Error(`window needs ${requestedBlocks} blocks, budget is ${BUDGET.maxBlocks}`);
+    err.code = BUDGET.windowTooLarge;
+    err.detail = { requestedBlocks, maxBlocks: BUDGET.maxBlocks, requestedHours: Number(spanHours.toFixed(4)) };
+    throw err;
+  }
+  const latest = Number(await rpc.call("eth_blockNumber"));
+  const headBlk = await rpc.call("eth_getBlockByNumber", ["0x" + latest.toString(16), true]);
+  const headTs = headBlk && headBlk.timestamp ? Number(headBlk.timestamp) : Math.floor(Date.now() / 1000);
+  if (fromSeconds > headTs) {
+    const err = new Error(`range starts after chain head timestamp (${headTs})`);
+    err.code = "INVALID_DATE_RANGE";
+    err.detail = { fromSeconds, toSeconds, headTimestamp: headTs };
+    throw err;
+  }
+  const effectiveTo = Math.min(toSeconds, headTs);
+  const offsetTo = Math.max(0, Math.floor((headTs - effectiveTo) / CHAIN.secondsPerBlock));
+  const toBlock = Math.max(0, latest - offsetTo);
+  const blocks = Math.max(1, Math.round((effectiveTo - fromSeconds) / CHAIN.secondsPerBlock));
+  if (blocks > BUDGET.maxBlocks) {
+    const err = new Error(`window needs ${blocks} blocks, budget is ${BUDGET.maxBlocks}`);
+    err.code = BUDGET.windowTooLarge;
+    err.detail = { requestedBlocks: blocks, maxBlocks: BUDGET.maxBlocks, requestedHours: Number(spanHours.toFixed(4)) };
+    throw err;
+  }
+  const fromBlock = Math.max(0, toBlock - blocks + 1);
+  return { latest, fromBlock, toBlock, blocks: toBlock - fromBlock + 1 };
+}
+
 // A chunk that fails as a whole is one gap for its range, not one per block:
 // same information, readable report.
 function errText(err) {

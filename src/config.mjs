@@ -13,6 +13,7 @@ export const CHAIN = Object.freeze({
   id: 1672,
   name: "Pharos Pacific Mainnet",
   rpc: "https://rpc.pharos.xyz",
+  explorer: "https://explorer.pharos.xyz",
   nativeSymbol: "PROS",
   nativeDecimals: 18,
   // Measured: 100 blocks span 105 seconds. Used only for cost estimates and
@@ -69,6 +70,7 @@ export function publicConfig() {
     chain: {
       id: CHAIN.id,
       name: CHAIN.name,
+      explorer: CHAIN.explorer,
       nativeSymbol: CHAIN.nativeSymbol,
       nativeDecimals: CHAIN.nativeDecimals,
       secondsPerBlock: CHAIN.secondsPerBlock,

@@ -16,7 +16,7 @@ import { KIND, classifyLog, classifyTx, entryKey } from "./classify.mjs";
 import { formatUnits } from "./numbers.mjs";
 import { CHAIN, BUDGET } from "./config.mjs";
 import { toChecksumAddress, normalizeAddress } from "./address.mjs";
-import { scanBlocks, scanLogs, scanReceipts, resolveTokenMeta, resolveWindow } from "./scan.mjs";
+import { scanBlocks, scanLogs, scanReceipts, resolveTokenMeta, resolveWindow, resolveDateRangeWindow } from "./scan.mjs";
 import { createRpc } from "./rpc.mjs";
 
 const MOVEMENT_KINDS = new Set([
@@ -311,7 +311,7 @@ export async function buildReport(rpc, { wallet, hours, window, nowSeconds = Mat
 // Orchestrator: build a transport, resolve the window from the chain head, and
 // produce the report. Anyone calling this gets the same code path the HTTP
 // handler uses, so a CLI run and an API run cannot drift apart.
-export async function runAudit({ wallet, hours = null, atSeconds = null, window = null, fetchImpl = undefined, retries = undefined, backoffBaseMs = undefined, sleep = undefined } = {}) {
+export async function runAudit({ wallet, hours = null, fromSeconds = null, toSeconds = null, atSeconds = null, window = null, fetchImpl = undefined, retries = undefined, backoffBaseMs = undefined, sleep = undefined } = {}) {
   const rpc = createRpc({
     url: CHAIN.rpc,
     fetchImpl,
@@ -322,8 +322,13 @@ export async function runAudit({ wallet, hours = null, atSeconds = null, window 
 
   // An explicit window is how tests and fixture recording pin exact blocks. A
   // caller who does not supply one gets the chain head, which is what the API does.
-  const resolved = window ?? (await resolveWindow(rpc, hours, atSeconds));
-  const report = await buildReport(rpc, { wallet, hours, window: resolved, nowSeconds: atSeconds });
+  const resolved =
+    window ??
+    (fromSeconds !== null && toSeconds !== null
+      ? await resolveDateRangeWindow(rpc, { fromSeconds, toSeconds })
+      : await resolveWindow(rpc, hours, atSeconds));
+  const effectiveHours = hours !== null ? hours : fromSeconds !== null && toSeconds !== null ? Number(((toSeconds - fromSeconds) / 3600).toFixed(4)) : null;
+  const report = await buildReport(rpc, { wallet, hours: effectiveHours, window: resolved, nowSeconds: atSeconds });
 
   return report;
 }

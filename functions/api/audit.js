@@ -1,10 +1,14 @@
 
-// POST /api/audit  { wallet, hours? }
+// POST /api/audit  { wallet, hours? } | { wallet, from, to }
 //
-// The caller supplies a wallet and a window. Nothing else. It cannot supply
+// The caller supplies a wallet and a window (either relative `hours` or an
+// explicit `from`..`to` date range). Nothing else. It cannot supply
 // transactions, categories, amounts or a verdict — that was the whole defect of
 // the scaffold, which audited whatever list the browser handed it and returned
 // success: true.
+//
+// Optional query parameter `?format=markdown` or `?format=csv` exports the
+// report directly as Markdown or CSV.
 //
 // Two responses deserve comment:
 //
@@ -19,6 +23,7 @@
 //   than was asked for.
 
 import { runAudit } from "../../src/report.mjs";
+import { toMarkdown, toCsv } from "../../src/export.mjs";
 import { isAddress, toChecksumAddress } from "../../src/address.mjs";
 import { BUDGET, JOB, blocksForHours, maxHoursForBudget, publicConfig } from "../../src/config.mjs";
 
@@ -42,8 +47,9 @@ function fail(code, message, status, detail = undefined) {
   return json({ error }, status);
 }
 
-const ALLOWED_KEYS = new Set(["wallet", "hours"]);
+const ALLOWED_KEYS = new Set(["wallet", "hours", "from", "to"]);
 const DECIMAL = /^\d+(\.\d+)?$/;
+const INT_DIGITS = /^\d+$/;
 
 /** Parse hours strictly. "0.25" is fine; "0.25h", "1e3" and "" are not. */
 function parseHours(raw) {
@@ -61,7 +67,34 @@ function parseHours(raw) {
   return { ok: false, reason: "hours must be a number" };
 }
 
+/** Parse a date/time bound (unix seconds or ISO-8601 string) into unix seconds. */
+function parseTimestamp(raw, label) {
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw) || raw <= 0) return { ok: false, reason: `${label} must be a positive timestamp` };
+    return { ok: true, value: Math.floor(raw > 1e12 ? raw / 1000 : raw) };
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return { ok: false, reason: `${label} must not be empty` };
+    if (INT_DIGITS.test(trimmed)) {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n <= 0) return { ok: false, reason: `${label} must be a positive timestamp` };
+      return { ok: true, value: Math.floor(n > 1e12 ? n / 1000 : n) };
+    }
+    const ms = Date.parse(trimmed);
+    if (!Number.isFinite(ms) || ms <= 0) return { ok: false, reason: `${label} must be a valid ISO-8601 date or unix timestamp` };
+    return { ok: true, value: Math.floor(ms / 1000) };
+  }
+  return { ok: false, reason: `${label} must be an ISO-8601 string or unix timestamp` };
+}
+
 export async function onRequestPost({ request }) {
+  const url = new URL(request.url);
+  const format = (url.searchParams.get("format") ?? "json").toLowerCase();
+  if (format !== "json" && format !== "markdown" && format !== "csv") {
+    return fail("INVALID_FORMAT", "format must be json, markdown, or csv", 400);
+  }
+
   let body;
   try {
     body = await request.json();
@@ -77,7 +110,7 @@ export async function onRequestPost({ request }) {
   // "transactions" or "policy" should learn that those inputs do not exist here.
   const unknown = Object.keys(body).filter((k) => !ALLOWED_KEYS.has(k));
   if (unknown.length > 0) {
-    return fail("UNKNOWN_FIELD", `this endpoint accepts only wallet and hours; got ${unknown.join(", ")}`, 400, { allowed: [...ALLOWED_KEYS] });
+    return fail("UNKNOWN_FIELD", `this endpoint accepts only wallet and a window (hours or from/to); got ${unknown.join(", ")}`, 400, { allowed: [...ALLOWED_KEYS] });
   }
 
   const wallet = body.wallet;
@@ -85,13 +118,38 @@ export async function onRequestPost({ request }) {
     return fail("INVALID_WALLET", "wallet must be a 0x-prefixed 20-byte hex address", 400);
   }
 
-  const hours = parseHours(body.hours);
-  if (!hours.ok) return fail("INVALID_HOURS", hours.reason, 400);
+  const hasRange = body.from !== undefined || body.to !== undefined;
+  let hoursValue = null;
+  let fromSeconds = null;
+  let toSeconds = null;
 
-  const blocks = blocksForHours(hours.value);
+  if (hasRange) {
+    if (body.hours !== undefined && body.hours !== null) {
+      return fail("INVALID_DATE_RANGE", "supply either hours or from/to date range, not both", 400);
+    }
+    if (body.from === undefined || body.to === undefined) {
+      return fail("INVALID_DATE_RANGE", "both from and to are required when specifying a date range", 400);
+    }
+    const parsedFrom = parseTimestamp(body.from, "from");
+    if (!parsedFrom.ok) return fail("INVALID_DATE_RANGE", parsedFrom.reason, 400);
+    const parsedTo = parseTimestamp(body.to, "to");
+    if (!parsedTo.ok) return fail("INVALID_DATE_RANGE", parsedTo.reason, 400);
+    if (parsedTo.value <= parsedFrom.value) {
+      return fail("INVALID_DATE_RANGE", "to must be later than from", 400);
+    }
+    fromSeconds = parsedFrom.value;
+    toSeconds = parsedTo.value;
+    hoursValue = Number(((toSeconds - fromSeconds) / 3600).toFixed(4));
+  } else {
+    const hours = parseHours(body.hours);
+    if (!hours.ok) return fail("INVALID_HOURS", hours.reason, 400);
+    hoursValue = hours.value;
+  }
+
+  const blocks = blocksForHours(hoursValue);
   if (blocks > BUDGET.maxBlocks) {
-    return fail("WINDOW_EXCEEDS_BUDGET", `a ${hours.value}h window needs ${blocks} blocks; the budget is ${BUDGET.maxBlocks}`, 400, {
-      requestedHours: hours.value,
+    return fail("WINDOW_EXCEEDS_BUDGET", `a ${hoursValue}h window needs ${blocks} blocks; the budget is ${BUDGET.maxBlocks}`, 400, {
+      requestedHours: hoursValue,
       requestedBlocks: blocks,
       maxBlocks: BUDGET.maxBlocks,
       maxHours: Number(maxHoursForBudget().toFixed(3)),
@@ -99,9 +157,32 @@ export async function onRequestPost({ request }) {
   }
 
   try {
-    const report = await runAudit({ wallet: toChecksumAddress(wallet), hours: hours.value });
+    const report = await runAudit({
+      wallet: toChecksumAddress(wallet),
+      hours: hasRange ? null : hoursValue,
+      fromSeconds,
+      toSeconds,
+    });
+    if (format === "markdown") {
+      return new Response(toMarkdown(report), {
+        status: 200,
+        headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store", ...CORS },
+      });
+    }
+    if (format === "csv") {
+      return new Response(toCsv(report), {
+        status: 200,
+        headers: { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store", ...CORS },
+      });
+    }
     return json(report, 200);
   } catch (err) {
+    if (err && err.code === "INVALID_DATE_RANGE") {
+      return fail("INVALID_DATE_RANGE", err.message, 400, err.detail);
+    }
+    if (err && err.code === BUDGET.windowTooLarge) {
+      return fail(BUDGET.windowTooLarge, err.message, 400, err.detail);
+    }
     // A transport failure means no audit happened at all. It is not an empty log.
     const code = err && err.code ? err.code : "UPSTREAM_UNAVAILABLE";
     return fail(code, err && err.message ? err.message : "audit failed", 502, err && err.detail ? err.detail : undefined);

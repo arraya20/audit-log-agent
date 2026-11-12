@@ -17,8 +17,8 @@
     "fixtures:record": "node scripts/record-fixture.mjs",
     "fixtures:dump": "node scripts/dump-fixtures.mjs",
     "verify": "node scripts/verify.mjs",
-    "dev": "wrangler pages dev",
-    "deploy": "wrangler pages deploy"
+    "dev": "wrangler pages dev public",
+    "deploy": "wrangler pages deploy public"
   },
   "dependencies": {},
   "devDependencies": {},

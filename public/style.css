@@ -47,6 +47,7 @@ form {
 }
 
 .field { display: flex; flex-direction: column; gap: 6px; }
+.field[hidden] { display: none; }
 .field > span {
   font-size: 11px;
   text-transform: uppercase;
@@ -63,10 +64,10 @@ input, select {
   border-radius: 6px;
   background: var(--paper);
   color: var(--ink);
-  min-width: 200px;
+  min-width: 170px;
 }
 
-input { width: 420px; max-width: 100%; }
+#wallet { width: 400px; max-width: 100%; }
 input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
 button {
@@ -81,6 +82,50 @@ button {
 }
 button:hover { background: #000; }
 button:disabled { opacity: 0.45; cursor: default; }
+
+button.secondary {
+  background: var(--paper);
+  color: var(--ink);
+  border-color: var(--rule);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 7px 12px;
+}
+button.secondary:hover {
+  border-color: var(--ink);
+  background: #fafbfc;
+}
+
+.export-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 16px;
+}
+.export-bar .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-right: 4px;
+}
+
+.summary-prose {
+  margin: 16px 0 0;
+  padding: 16px 18px;
+  border-left: 3px solid var(--ink);
+  background: #fafbfc;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+.sub-caption {
+  margin: -6px 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
 
 .status { min-height: 22px; margin: 20px 0 0; color: var(--muted); font-size: 13px; }
 .status.error { color: #b42318; }
@@ -136,15 +181,22 @@ td {
 td.num, th.num { text-align: right; font-family: var(--mono); }
 td.kind { font-family: var(--mono); font-size: 12px; }
 td.when { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
-td.addr { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+td.addr { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+
+a.chain-link {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--rule);
+  text-underline-offset: 2px;
+}
+a.chain-link:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
 
 .empty { color: var(--muted); font-size: 13px; }
 
 .dim { color: var(--muted); }
-
-/* Addresses are the densest column; give them room to breathe without wrapping
-   the row into two lines. The full value is in the title attribute. */
-td.addr { white-space: nowrap; cursor: help; }
 
 tbody tr:hover { background: #fafbfc; }
 
@@ -169,3 +221,10 @@ tbody tr:hover { background: #fafbfc; }
   color: var(--muted);
 }
 .limits b { font-weight: 600; color: var(--ink); }
+
+@media print {
+  form, .export-bar, #status, #limits { display: none !important; }
+  main { padding: 0; max-width: 100%; }
+  section.block { page-break-inside: avoid; margin-top: 24px; }
+  a.chain-link { text-decoration: none; }
+}

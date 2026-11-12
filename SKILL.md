@@ -12,9 +12,12 @@ Read-only. No signing, no keys, no execution, no valuation.
 
 ## Input
 
-`POST /api/audit` takes `wallet` and optional `hours`. Nothing else. The caller
-may not supply transactions, categories, amounts or a verdict — every fact in the
-report comes from chain data this service reads.
+`POST /api/audit` takes `wallet` and either optional `hours` or an explicit
+`from` + `to` date range (ISO-8601 or unix timestamp). Optional query parameter
+`?format=markdown` or `?format=csv` exports the report directly as Markdown or
+CSV. Nothing else is accepted in the request body: the caller may not supply
+transactions, categories, amounts or a verdict — every fact in the report comes
+from chain data this service reads.
 
 ## Procedure
 

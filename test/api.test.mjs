@@ -87,6 +87,66 @@ await test("a partial audit is a 200 that says so, never a silent empty log", as
   });
 });
 
+await test("accepts an explicit date range (from/to) and resolves the matching block window", async () => {
+  await withChain("api", async (fetchImpl) => {
+    // Head block 0x1522434 in api.json has timestamp 0x6aec23b9 (1793860537);
+    // a 36-second window (0.01h) resolves to the 34-block fixture [22160403..22160436].
+    const res = await post({
+      wallet: WALLET,
+      from: new Date(1793860501 * 1000).toISOString(),
+      to: new Date(1793860537 * 1000).toISOString(),
+    });
+    eq(res.status, 200);
+    const body = await res.json();
+    eq(body.wallet, WALLET);
+    eq(body.completeness, "COMPLETE");
+    eq(body.movements.length, 4);
+    eq(fetchImpl.misses.length, 0);
+  });
+});
+
+await test("exports markdown and csv when requested via query format parameter", async () => {
+  await withChain("api", async () => {
+    const mdRes = await onRequest({
+      request: new Request("https://example.test/api/audit?format=markdown", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ wallet: WALLET, hours: "0.01" }),
+      }),
+    });
+    eq(mdRes.status, 200);
+    assert(mdRes.headers.get("content-type").includes("text/markdown"), "markdown content-type expected");
+    const mdText = await mdRes.text();
+    assert(mdText.includes("# Wallet Activity Audit Report"), "markdown title expected");
+
+    const csvRes = await onRequest({
+      request: new Request("https://example.test/api/audit?format=csv", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ wallet: WALLET, hours: "0.01" }),
+      }),
+    });
+    eq(csvRes.status, 200);
+    assert(csvRes.headers.get("content-type").includes("text/csv"), "csv content-type expected");
+    const csvText = await csvRes.text();
+    assert(csvText.includes("TRANSFERS_OUT,TOKEN_OUT,true"), "csv movement row expected");
+  });
+});
+
+await test("rejects invalid or conflicting date ranges", async () => {
+  const both = await post({ wallet: WALLET, hours: "0.01", from: "2026-11-05T06:00:00Z", to: "2026-11-05T06:15:00Z" });
+  eq(both.status, 400);
+  eq((await both.json()).error.code, "INVALID_DATE_RANGE");
+
+  const inverted = await post({ wallet: WALLET, from: "2026-11-05T06:15:00Z", to: "2026-11-05T06:00:00Z" });
+  eq(inverted.status, 400);
+  eq((await inverted.json()).error.code, "INVALID_DATE_RANGE");
+
+  const half = await post({ wallet: WALLET, from: "2026-11-05T06:00:00Z" });
+  eq(half.status, 400);
+  eq((await half.json()).error.code, "INVALID_DATE_RANGE");
+});
+
 suite("request validation");
 
 await test("a caller-supplied transaction list is refused, not ignored", async () => {
